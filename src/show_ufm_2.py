@@ -13,7 +13,7 @@ HDF5_FILE = PROJECT_DIR / "data" / "hdf5_file"
 
 def animate_temperature_fractures(file_path):
 
-    sim_ids = range(28, 29)
+    sim_ids = range(45, 55)
 
     all_sim_data = []
 
@@ -103,7 +103,7 @@ def animate_temperature_fractures(file_path):
     # 创建画布
     # -----------------------------------
 
-    fig = plt.figure(figsize=(14, 10))
+    fig = plt.figure(figsize=(6,5))
 
     ax = fig.add_subplot(111, projection='3d')
 
@@ -163,6 +163,7 @@ def animate_temperature_fractures(file_path):
 
     frames_map = []
 
+    # 这里的 s_idx 是从 0 开始的索引，不是 sim_id
     for s_idx, sim in enumerate(all_sim_data):
 
         num_steps = sim['X'].shape[0]
@@ -236,7 +237,7 @@ def animate_temperature_fractures(file_path):
         # -----------------------------------
         # 固定之前完成的Stage
         # -----------------------------------
-
+        # i 是之前的模拟索引，不是 sim_id
         for i in range(curr_sim_idx):
 
             if i not in finalized_sims:
@@ -300,6 +301,6 @@ def animate_temperature_fractures(file_path):
 if __name__ == "__main__":
 
     # target = r"JY68-4HF.h5"
-    target = HDF5_FILE /  "JY108-7HF_cluster1.h5"
+    target = HDF5_FILE /  "JY68-4HF.h5"
 
     animate_temperature_fractures(target)

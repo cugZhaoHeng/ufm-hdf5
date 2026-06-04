@@ -1,0 +1,469 @@
+# -*- coding: utf-8 -*-
+"""
+UFM 多簇裂缝动态同步生长与真实井轨迹联合展示（真实 Z 坐标与视口自动裁剪优化版）
+"""
+
+from pathlib import Path
+import h5py
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import re
+import pandas as pd
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from matplotlib.animation import FuncAnimation
+
+INVALID_LIMIT = 1.0e30
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = CURRENT_DIR.parent
+HDF5_FILE = PROJECT_DIR / "data" / "hdf5_file"
+OUT_PUT_IDR = PROJECT_DIR / "output"
+
+
+def list_fracture_simulation_ids(f):
+    """列出 HDF5 根目录下全部 Fracture Simulation {sim_id}。"""
+    sim_ids = []
+    pattern = re.compile(r"^Fracture Simulation\s+(\d+)$")
+    for name in f.keys():
+        match = pattern.match(name)
+        if match:
+            sim_ids.append(name.split()[-1])
+    return sorted(sim_ids)
+
+
+def safe_valid_values(arr):
+    """去除 NaN、Inf 和 UFM 常见无效大数值。"""
+    arr = np.asarray(arr, dtype=float)
+    mask = np.isfinite(arr) & (np.abs(arr) < INVALID_LIMIT)
+    return arr[mask]
+
+
+def read_cell_property(f, base_path, prop_name="WidthProfile"):
+    """读取 cell 级属性。"""
+    prop_path = f"{base_path}/Elements/Cells/{prop_name}"
+    if prop_path not in f:
+        raise KeyError(f"未找到 cell 属性路径：{prop_path}")
+    data = np.asarray(f[prop_path][:], dtype=float)
+    if data.ndim != 3:
+        raise ValueError(f"{prop_name} 应为三维数组 (time, element, cell)")
+    data = np.where(np.abs(data) < INVALID_LIMIT, data, np.nan)
+    return data
+
+
+def split_element_to_cell_quads(points4, n_cells):
+    """将一个四边形 element 近似剖分为 n_cells 个小四边形。"""
+    p1, p2, p3, p4 = points4
+    quads = []
+    for k in range(n_cells):
+        eta0 = k / n_cells
+        eta1 = (k + 1) / n_cells
+        left0 = (1.0 - eta0) * p1 + eta0 * p4
+        right0 = (1.0 - eta0) * p2 + eta0 * p3
+        right1 = (1.0 - eta1) * p2 + eta1 * p3
+        left1 = (1.0 - eta1) * p1 + eta1 * p4
+        quads.append(np.vstack([left0, right0, right1, left1]))
+    return quads
+
+
+def compute_direct_vmin_vmax(values):
+    """计算色标的数值范围。"""
+    values = safe_valid_values(values)
+    if values.size == 0:
+        raise ValueError("没有有效属性值，无法计算色标范围。")
+    raw_min = float(np.nanmin(values))
+    raw_max = float(np.nanmax(values))
+    vmin, vmax = raw_min, raw_max
+    if np.isclose(vmin, vmax):
+        delta = 0.5 if np.isclose(vmin, 0.0) else abs(vmin) * 0.05
+        vmin = raw_min - delta
+        vmax = raw_max + delta
+    return raw_min, raw_max, vmin, vmax
+
+
+def load_single_simulation_data(f, sim_id, prop_name="WidthProfile"):
+    """加载单个 Simulation 的完整时间序列数据。"""
+    sim_key = f"Fracture Simulation {sim_id}"
+    if isinstance(sim_id, int):
+        sim_key = f"Fracture Simulation {sim_id:02d}"
+
+    if sim_key not in f:
+        sim_key = f"Fracture Simulation {sim_id}"
+        if sim_key not in f:
+            raise KeyError(f"未找到模拟数据组: {sim_key}")
+
+    base_path = f"{sim_key}/Results/Bulk/UFM/FractureSet"
+    points_path = f"{base_path}/Elements/Points"
+    element_count_path = f"{base_path}/ElementCount"
+
+    X = np.asarray(f[f"{points_path}/X"][:], dtype=float)
+    Y = np.asarray(f[f"{points_path}/Y"][:], dtype=float)
+    Z = np.asarray(f[f"{points_path}/Z"][:], dtype=float)
+    ElementCount = np.asarray(f[element_count_path][:]).reshape(-1).astype(int)
+    CellProperty = read_cell_property(f, base_path, prop_name=prop_name)
+
+    n_time = min(X.shape[0], len(ElementCount), CellProperty.shape[0])
+    n_element_max = min(X.shape[1], CellProperty.shape[1])
+    n_cells = CellProperty.shape[2]
+
+    return {
+        "sim_id": sim_id,
+        "n_time": n_time,
+        "n_element_max": n_element_max,
+        "n_cells": n_cells,
+        "X": X,
+        "Y": Y,
+        "Z": Z,
+        "ElementCount": ElementCount,
+        "CellProperty": CellProperty
+    }
+
+
+def load_well_trajectory(file_path):
+    """读取真实的测斜数据，保留所有可能的 Z 轴基准面候选列。"""
+    try:
+        df = pd.read_csv(file_path, sep=r'\s+', comment='#')
+        return {
+            "X": df['X'].values,
+            "Y": df['Y'].values,
+            "ELEV": df['Z'].values,       # 候选 1: 原始海拔 Z（负值）
+            "SSTVD": -df['Z'].values,     # 候选 2: SSTVD 海拔深度（正值，约 1100m~1200m）
+            "TVD": df['TVD'].values,      # 候选 3: TVD 垂深（绝对正值，约 1700m~2400m）
+        }
+    except FileNotFoundError:
+        raise FileNotFoundError(f"未找到井轨迹文件：{file_path}，请确认路径。")
+
+
+def animate_fractures_and_well_simultaneously(
+    h5_file_path,
+    well_file_path,
+    sim_ids,
+    prop_name="WidthProfile",
+    interval=150,
+    repeat=False,
+    remove_origin=True,
+    invert_z_axis=True,
+    cmap_name="jet",
+    alpha=1.0,
+    edge_color="0.50",
+    edge_width=0.013,
+    view_elev=24,
+    view_azim=-58,
+    save_path=None,
+    fps=10,
+    value_scale=1000.0,
+    value_unit="mm",
+):
+    """
+    联合展示：完整实测井轨迹 + 动态同步生长裂缝（Z轴视口裁剪）
+    """
+    # 1. 载入真实井轨迹
+    well_data = load_well_trajectory(well_file_path)
+
+    # 2. 读取裂缝模拟数据
+    sim_data_list = []
+    with h5py.File(h5_file_path, "r") as f:
+        if sim_ids is None:
+            sim_ids = list_fracture_simulation_ids(f)
+        for s_id in sim_ids:
+            try:
+                data = load_single_simulation_data(f, s_id, prop_name)
+                sim_data_list.append(data)
+                print(f"  - 成功加载裂缝 sim {s_id}: 共 {data['n_time']} 个时间步")
+            except Exception as e:
+                print(f"  - 跳过裂缝 sim {s_id}，原因: {e}")
+
+    if not sim_data_list:
+        raise ValueError("没有加载到任何有效的裂缝数据。")
+
+    total_frames = min(s_data["n_time"] for s_data in sim_data_list)
+
+    # 3. 智能比对并选择与 H5 裂缝最贴合的井轨迹 Z 坐标体系
+    sample_s = sim_data_list[0]
+    t_mid = total_frames // 2
+    n_act_mid = min(sample_s["ElementCount"][t_mid], sample_s["n_element_max"])
+    mean_frac_z = np.nanmean(sample_s["Z"][t_mid, :n_act_mid, :])
+
+    mean_well_tvd = np.mean(well_data["TVD"])
+    mean_well_sstvd = np.mean(well_data["SSTVD"])
+    mean_well_elev = np.mean(well_data["ELEV"])
+
+    diffs = {
+        "TVD (垂深)": abs(mean_frac_z - mean_well_tvd),
+        "SSTVD (海拔深)": abs(mean_frac_z - mean_well_sstvd),
+        "ELEV (原始海拔)": abs(mean_frac_z - mean_well_elev)
+    }
+    best_fit = min(diffs, key=diffs.get)
+
+    if best_fit == "TVD (垂深)":
+        well_data["Z_aligned"] = well_data["TVD"]
+    elif best_fit == "SSTVD (海拔深)":
+        well_data["Z_aligned"] = well_data["SSTVD"]
+    else:
+        well_data["Z_aligned"] = well_data["ELEV"]
+
+    # 4. 获取裂缝实际垂直极值，用于限制 3D 绘图视窗的 Z 轴范围
+    frac_z_min = np.inf
+    frac_z_max = -np.inf
+    for s_data in sim_data_list:
+        t_final = total_frames - 1
+        n_active = min(s_data["ElementCount"][t_final], s_data["n_element_max"])
+        if n_active > 0:
+            frac_z_min = min(frac_z_min, np.nanmin(s_data["Z"][t_final, :n_active, :]))
+            frac_z_max = max(frac_z_max, np.nanmax(s_data["Z"][t_final, :n_active, :]))
+
+    print("=" * 60)
+    print(f"--> [坐标对齐成功]：H5 文件采用 {best_fit} 坐标体系。")
+    print(f"    裂缝真实 Z 坐标范围: {frac_z_min:.2f} m ~ {frac_z_max:.2f} m")
+    print("=" * 60)
+
+    # 5. 确定全局基准原点 (X0, Y0, Z0)
+    # 【重大修改】Z0 强制设为 0。不平移 Z 轴坐标，保留其真实的地下深度值
+    if remove_origin:
+        all_x = list(well_data["X"])
+        all_y = list(well_data["Y"])
+        for s_data in sim_data_list:
+            for t in range(total_frames):
+                n_active = min(s_data["ElementCount"][t], s_data["n_element_max"])
+                if n_active > 0:
+                    all_x.extend(s_data["X"][t, :n_active, :].flatten())
+                    all_y.extend(s_data["Y"][t, :n_active, :].flatten())
+
+        all_x = safe_valid_values(all_x)
+        all_y = safe_valid_values(all_y)
+
+        X0 = np.min(all_x) if len(all_x) > 0 else 0.0
+        Y0 = np.min(all_y) if len(all_y) > 0 else 0.0
+    else:
+        X0 = Y0 = 0.0
+        
+    Z0 = 0.0  # 保持真实的地下绝对 Z 坐标值
+
+    # 6. 转换展示空间坐标（Z 轴保留原值）
+    well_x_plot = well_data["X"] - X0
+    well_y_plot = well_data["Y"] - Y0
+    well_z_plot = well_data["Z_aligned"]  # 无平移，真实 Z
+
+    for s_data in sim_data_list:
+        s_data["X_plot"] = s_data["X"] - X0
+        s_data["Y_plot"] = s_data["Y"] - Y0
+        s_data["Z_plot"] = s_data["Z"]        # 无平移，真实 Z
+
+    # 7. 确定 3D 边界范围（X、Y 轴自动包络，Z 轴严格限定在裂缝垂直范围内）
+    global_min = np.array([np.nanmin(well_x_plot), np.nanmin(well_y_plot), frac_z_min - 15.0])
+    global_max = np.array([np.nanmax(well_x_plot), np.nanmax(well_y_plot), frac_z_max + 15.0])
+
+    span = global_max - global_min
+    pad_xy = np.maximum(span[:2] * 0.08, 1.0)
+    global_min[0] -= pad_xy[0]
+    global_max[0] += pad_xy[0]
+    global_min[1] -= pad_xy[1]
+    global_max[1] += pad_xy[1]
+
+    # 8. 统计全局属性极值以统一色标
+    all_prop_values = []
+    for s_data in sim_data_list:
+        for t in range(total_frames):
+            n_active = min(s_data["ElementCount"][t], s_data["n_element_max"])
+            if n_active > 0:
+                vals = s_data["CellProperty"][t, :n_active, :] * value_scale
+                all_prop_values.append(vals.reshape(-1))
+                
+    flat_values = np.concatenate(all_prop_values)
+    raw_min, raw_max, vmin, vmax = compute_direct_vmin_vmax(flat_values)
+
+    # 创建绘图画布
+    fig = plt.figure(figsize=(14.5, 8.8))
+    ax = fig.add_subplot(111, projection="3d")
+    fig.subplots_adjust(left=0.035, right=0.83, top=0.90, bottom=0.07)
+
+    # 【关键修改】设置视界边界限制。
+    # 井轨迹数据完全保留，但在 Z 轴上限和下限外的数据会被视窗自动裁切掉。
+    ax.set_xlim(global_min[0], global_max[0])
+    ax.set_ylim(global_min[1], global_max[1])
+    ax.set_zlim(global_min[2], global_max[2])
+
+    if invert_z_axis:
+        ax.invert_zaxis()
+
+    ax.view_init(elev=view_elev, azim=view_azim)
+    ax.set_xlabel(f"X - X0 (m), X0={X0:.3f}" if remove_origin else "X (m)", labelpad=12)
+    ax.set_ylabel(f"Y - Y0 (m), Y0={Y0:.3f}" if remove_origin else "Y (m)", labelpad=12)
+    ax.set_zlabel("Real Depth / Z (m)", labelpad=12)  # 显示真实的 Z 坐标刻度
+
+    # 设置适度拉伸的比例，使垂直方向的特征（裂缝高度）足够饱满可见
+    try:
+        ax.set_box_aspect((1.5, 1.5, 0.9))
+    except Exception:
+        pass
+
+    ax.set_facecolor("white")
+    try:
+        ax.xaxis.pane.set_facecolor((0.96, 0.98, 1.0, 1.0))
+        ax.yaxis.pane.set_facecolor((0.96, 0.98, 1.0, 1.0))
+        ax.zaxis.pane.set_facecolor((0.96, 0.98, 1.0, 1.0))
+        ax.grid(True, color="0.86", linewidth=0.6)
+    except Exception:
+        pass
+
+    # 9. 静态绘制完整的井轨迹（超出 Z 轴上下界限的井段会被视窗口自动截断，其余完整穿过裂缝）
+    ax.plot(well_x_plot, well_y_plot, well_z_plot, color='black', linewidth=3.5, label="Well Path", zorder=5)
+    ax.legend(loc="upper left")
+
+    current_collection = [None]
+
+    fig.suptitle(
+        f"UFM Fractures & Wellpath Joint Visualization | Cell {prop_name}",
+        fontsize=16,
+        fontweight="bold",
+        y=0.965,
+    )
+
+    # 信息提示框
+    info_text = ax.text2D(
+        0.018,
+        0.025,
+        "",
+        transform=ax.transAxes,
+        fontsize=10.5,
+        color="#1f6fd1",
+        va="bottom",
+        ha="left",
+        bbox=dict(
+            boxstyle="round,pad=0.45",
+            facecolor="#eef6ff",
+            edgecolor="#1f6fd1",
+            alpha=0.94,
+        ),
+    )
+
+    # 颜色条
+    cmap = mpl.colormaps[cmap_name]
+    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+    sm = mpl.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cax = fig.add_axes([0.90, 0.18, 0.026, 0.64])
+    cbar = fig.colorbar(sm, cax=cax)
+    cbar.set_label(f"Fracture {prop_name} ({value_unit})", fontsize=11, fontweight="bold")
+    cbar.ax.tick_params(labelsize=10)
+    if raw_min != raw_max:
+        cbar.set_ticks(np.linspace(vmin, vmax, 6))
+    cbar.ax.set_title("global limit", fontsize=9, pad=8)
+
+    def build_verts_for_sim_at_t(s_data, t):
+        n_active = min(s_data["ElementCount"][t], s_data["n_element_max"])
+        x_t = s_data["X_plot"][t, :n_active, :]
+        y_t = s_data["Y_plot"][t, :n_active, :]
+        z_t = s_data["Z_plot"][t, :n_active, :]
+        w_t = s_data["CellProperty"][t, :n_active, :] * value_scale
+        n_cells = s_data["n_cells"]
+
+        local_verts = []
+        local_colors = []
+
+        for e in range(n_active):
+            points4 = np.column_stack([x_t[e], y_t[e], z_t[e]])
+            if np.isnan(points4).any():
+                continue
+            values_cells = w_t[e, :]
+            if np.all(~np.isfinite(values_cells)):
+                continue
+
+            quads = split_element_to_cell_quads(points4, n_cells=n_cells)
+            for c_idx, quad in enumerate(quads):
+                val = values_cells[c_idx]
+                if not np.isfinite(val) or abs(val) >= INVALID_LIMIT:
+                    continue
+                local_verts.append(quad)
+                rgba = list(cmap(norm(val)))
+                rgba[3] = alpha
+                local_colors.append(rgba)
+
+        return local_verts, local_colors
+
+    def update(t):
+        if current_collection[0] is not None:
+            current_collection[0].remove()
+            current_collection[0] = None
+
+        all_verts = []
+        all_colors = []
+        summary_info = []
+
+        for s_data in sim_data_list:
+            s_id = s_data["sim_id"]
+            v, c = build_verts_for_sim_at_t(s_data, t)
+            all_verts.extend(v)
+            all_colors.extend(c)
+            summary_info.append(f"Sim {s_id}: Active Elements={s_data['ElementCount'][t]}, Patches={len(v)}")
+
+        new_col = Poly3DCollection(
+            all_verts,
+            facecolors=all_colors,
+            alpha=alpha,
+            edgecolors=edge_color,
+            linewidths=edge_width,
+            zorder=3,
+        )
+        ax.add_collection3d(new_col)
+        current_collection[0] = new_col
+
+        text_content = (
+            f"Time Step: {t}/{total_frames - 1}\n"
+            f"Simulations Count: {len(sim_data_list)}\n"
+            f"Total Rendered Patches: {len(all_verts)}\n"
+            + "\n".join(summary_info)
+        )
+        info_text.set_text(text_content)
+
+        return [new_col, info_text]
+
+    print("准备就绪，开始生成联合动画...")
+    
+    ani = FuncAnimation(
+        fig,
+        update,
+        frames=total_frames,
+        interval=interval,
+        blit=False,
+        repeat=repeat,
+    )
+    plt.show()
+    if save_path:
+        save_path = str(save_path)
+        print(f"正在保存联合动画到: {save_path} ...")
+        if save_path.lower().endswith(".gif"):
+            ani.save(save_path, writer="pillow", fps=fps)
+        else:
+            ani.save(save_path, writer="ffmpeg", fps=fps)
+        print("保存完毕！")
+        update(total_frames - 1)
+
+    
+
+
+if __name__ == "__main__":
+    # 路径配置
+    target_h5 = HDF5_FILE / "JY68-4HF.h5"
+    well_txt = PROJECT_DIR / "data" / "well_data" / "68-4HF"
+    
+    save_dir = OUT_PUT_IDR
+    save_dir.mkdir(parents=True, exist_ok=True)
+    combined_save_path = save_dir / "JY108-7HF_well_and_fracture_aligned.gif"
+
+    # 选择需要渲染的裂缝组
+    custom_sim_ids = ["47"]
+
+    animate_fractures_and_well_simultaneously(
+        h5_file_path=target_h5,
+        well_file_path=well_txt,
+        sim_ids=custom_sim_ids,
+        prop_name="AreaBasedPropConcProfile",
+        interval=120,
+        repeat=False,
+        remove_origin=True,      
+        invert_z_axis=True,      # 正深度向下展示
+        cmap_name="jet",
+        alpha=0.9,               # 微弱透明度，透视井眼
+        edge_width=0.01,
+        save_path=str(combined_save_path), 
+    )

@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import h5py
 import numpy as np
@@ -12,17 +13,23 @@ CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = CURRENT_DIR.parent
 HDF5_FILE = PROJECT_DIR / "data" / "hdf5_file"
 
+project_root_str = str(PROJECT_DIR)
+if project_root_str not in sys.path:
+    sys.path.insert(0, project_root_str)
+from utils.logger import create_logger
+logger = create_logger(__name__)
+
 def animate_sequential_growth_fixed(file_path):
-    sim_ids = range(45, 46)
+    sim_ids = range(45, 47)
     all_sim_data = []
 
-    print("读取 H5 数据中...")
+    logger.info("读取 H5 数据中...")
     with h5py.File(file_path, 'r') as f:
         global_min = np.array([np.inf, np.inf, np.inf])
         global_max = np.array([-np.inf, -np.inf, -np.inf])
 
         for sim_id in sim_ids:
-            print(f"sim_id: {sim_id}")
+            logger.info(f"sim_id: {sim_id}")
             path = f"Fracture Simulation {sim_id}/Results/Bulk/UFM/FractureSet/Elements/Points"
             if f"{path}/X" not in f:
                 continue
@@ -37,7 +44,7 @@ def animate_sequential_growth_fixed(file_path):
                 global_max = np.maximum(global_max, [np.nanmax(X), np.nanmax(Y), np.nanmax(Z)])
 
     if not all_sim_data:
-        print("未发现有效数据。")
+        logger.info("未发现有效数据。")
         return
 
     # 2. 设置画布
@@ -65,10 +72,10 @@ def animate_sequential_growth_fixed(file_path):
     frames_map = []
     for s_idx, sim in enumerate(all_sim_data):
         num_steps = sim['X'].shape[0]
-        print(f"num_steps: {num_steps}")
+        logger.info(f"num_steps: {num_steps}")
         for t in range(num_steps):
             frames_map.append((s_idx, t))
-
+    logger.info(f"Total frames: {len(frames_map)}")
     # 用于记录哪些模拟已经完成了生长，避免重复计算
     finalized_sims = set()
 
@@ -100,7 +107,7 @@ def animate_sequential_growth_fixed(file_path):
 
     # 5. 执行动画
     # 注意：这里设置 blit=False 是为了保证 3D 渲染的兼容性
-    ani = FuncAnimation(fig, update, frames=len(frames_map), interval=200, blit=False)
+    # ani = FuncAnimation(fig, update, frames=len(frames_map), interval=200, blit=False)
 
     # 如果需要保存视频，取消下面行的注释
     # ani.save('sequential_fractures.mp4', writer='ffmpeg', fps=15)
