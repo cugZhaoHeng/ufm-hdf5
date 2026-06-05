@@ -18,6 +18,7 @@ if project_root_str not in sys.path:
     sys.path.insert(0, project_root_str)
 from utils.logger import create_logger
 logger = create_logger(__name__)
+from utils.date_util import get_current_time
 
 def read_well_trajectory(file_path):
     """
@@ -28,9 +29,11 @@ def read_well_trajectory(file_path):
     
     try:
         df = pd.read_csv(file_path, sep=r'\s+', comment="#")  # 根据实际文件格式调整分隔符
-        well_x = df["X"].values
-        well_y = df["Y"].values
-        well_z = df["Z"].values
+        n = 400
+        df_last = df.tail(n)
+        well_x = df_last["X"].values
+        well_y = df_last["Y"].values
+        well_z = df_last["TVD"].values
         return well_x, well_y, well_z
     except Exception as e:
         logger.error(f"读取井轨迹数据失败: {e}")
@@ -90,6 +93,7 @@ def show2(well_x, well_y, well_z):
     ax1.set_xlabel("X (Easting, m)", labelpad=10)
     ax1.set_ylabel("Y (Northing, m)", labelpad=10)
     ax1.set_zlabel("Elevation / Z (m)", labelpad=10)
+    ax1.invert_zaxis()
     ax1.legend()
 
     # 保持 3D 图形比例协调
@@ -145,12 +149,14 @@ def show_dynamic_animation(well_x, well_y, well_z):
         line.set_3d_properties(well_z[:frame+1])
         return line,
     ani = FuncAnimation(fig, update, frames=len(well_x), interval=50, blit=True)
-    ani.save(OUT_PUT_IDR / 'well_trajectory_animation.gif', writer='pillow', fps=20)  # 保存为GIF动画
-    ani.save(OUT_PUT_IDR / 'well_trajectory_animation.mp4', writer='ffmpeg', fps=20) # 保存为MP4视频
+    # ani.save(OUT_PUT_IDR / f'well_trajectory_animation_{get_current_time()}.gif', writer='pillow', fps=20)  # 保存为GIF动画
+    ani.save(OUT_PUT_IDR / f'well_trajectory_animation_{get_current_time()}.mp4', writer='ffmpeg', fps=20) # 保存为MP4视频
+    logger.info(f"动画已保存到: {OUT_PUT_IDR / f'well_trajectory_animation_{get_current_time()}.mp4'}")
     plt.show()
 
 if __name__ == "__main__":
     well_data = read_well_trajectory(WELL_DATA_DIR / "68-4HF")
+    # well_data = read_well_trajectory(WELL_DATA_DIR / "68-4HF-02.txt")
     well_x, well_y, well_z = well_data
     # well_x = well_x - well_x[0]
     # well_y = well_y - well_y[0]
@@ -162,6 +168,6 @@ if __name__ == "__main__":
     
     # show_well_trajectory(well_x, well_y, well_z)
     # show1(well_x, well_y, well_z)
-    show2(well_x, well_y, well_z)
+    # show2(well_x, well_y, well_z)
     # show_dynamic(well_x, well_y, well_z)
-    # show_dynamic_animation(well_x, well_y, well_z)
+    show_dynamic_animation(well_x, well_y, well_z)
