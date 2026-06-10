@@ -416,5 +416,5 @@ if __name__ == "__main__":
         keep_aspect=False,
         save_format="gif",
         show_all=False,
-        stage_indices=[0, 10, -1],
+        stage_indices=[0],
     )

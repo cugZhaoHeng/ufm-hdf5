@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+h5py>=3.10
+numpy>=1.26
+pandas>=2.2
+matplotlib>=3.8
+pillow>=10.0
+concurrent-log-handler>=0.9.25

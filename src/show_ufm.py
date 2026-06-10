@@ -322,9 +322,9 @@ if __name__ == "__main__":
     animate_temperature_fractures(
         h5_file_path=h5_file_path,
         well_csv_path=well_csv_path,
-        keep_aspect=False,
-        # save_format="gif",
+        keep_aspect=True,
+        save_format="gif",
         property_name="NetPressure",
-        show_all=False,
-        stage_indices=[0, 10,-1]
+        show_all=True,
+        stage_indices=[0]
     )
