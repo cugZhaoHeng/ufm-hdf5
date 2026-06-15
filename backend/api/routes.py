@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -21,8 +22,10 @@ from backend.services.files import (
 from backend.services.hdf5_inspector import inspect_hdf5_file
 from backend.services.snapshot import build_final_state_snapshot
 from backend.services.task_manager import TASK_MANAGER
+from utils.logger import create_logger
 
 router = APIRouter()
+logger = create_logger(__name__)
 
 
 @router.get("/files/h5", tags=["Files"])
@@ -106,20 +109,94 @@ def create_animation(request: AnimationRequest):
     task_id = TASK_MANAGER.create_task(total_groups=len(request.group_names))
 
     def job(progress_callback):
-        return generate_ufm_animation(
-            h5_file_path=h5_path,
-            group_names=request.group_names,
-            group_display_names=request.group_display_names,
-            level=request.level,
-            property_name=request.property_name,
-            output_format=request.output_format,
-            output_dir=get_output_path(),
-            well_file_path=well_path,
-            fps=request.fps,
-            interval=request.interval,
-            keep_aspect=request.keep_aspect,
-            progress_callback=progress_callback,
+        task_start = perf_counter()
+        logger.info(
+            "Animation task started | task_id=%s renderer=%s level=%s property=%s groups=%s stride=%s format=%s",
+            task_id,
+            request.renderer,
+            request.level,
+            request.property_name,
+            len(request.group_names),
+            request.time_step_stride,
+            request.output_format,
         )
+
+        def generate_with_matplotlib():
+            return generate_ufm_animation(
+                h5_file_path=h5_path,
+                group_names=request.group_names,
+                group_display_names=request.group_display_names,
+                level=request.level,
+                property_name=request.property_name,
+                output_format=request.output_format,
+                output_dir=get_output_path(),
+                well_file_path=well_path,
+                fps=request.fps,
+                interval=request.interval,
+                keep_aspect=request.keep_aspect,
+                time_step_stride=request.time_step_stride,
+                progress_callback=progress_callback,
+            )
+
+        try:
+            if request.renderer == "pyvista":
+                from backend.services.pyvista_animation import generate_pyvista_ufm_animation
+
+                try:
+                    result_path = generate_pyvista_ufm_animation(
+                        h5_file_path=h5_path,
+                        group_names=request.group_names,
+                        group_display_names=request.group_display_names,
+                        level=request.level,
+                        property_name=request.property_name,
+                        output_format=request.output_format,
+                        output_dir=get_output_path(),
+                        well_file_path=well_path,
+                        fps=request.fps,
+                        keep_aspect=request.keep_aspect,
+                        time_step_stride=request.time_step_stride,
+                        progress_callback=progress_callback,
+                    )
+                    elapsed = perf_counter() - task_start
+                    logger.info(
+                        "Animation task completed | task_id=%s renderer=%s elapsed=%.2fs output=%s",
+                        task_id,
+                        request.renderer,
+                        elapsed,
+                        result_path,
+                    )
+                    return result_path
+                except Exception as exc:
+                    logger.warning(f"PyVista renderer failed, fallback to Matplotlib: {exc}")
+                    progress_callback(
+                        percent=1,
+                        total_groups=len(request.group_names),
+                        message="PyVista renderer failed on this machine. Falling back to Matplotlib.",
+                    )
+                    result_path = generate_with_matplotlib()
+                    elapsed = perf_counter() - task_start
+                    logger.info(
+                        "Animation task completed after fallback | task_id=%s elapsed=%.2fs output=%s",
+                        task_id,
+                        elapsed,
+                        result_path,
+                    )
+                    return result_path
+
+            result_path = generate_with_matplotlib()
+            elapsed = perf_counter() - task_start
+            logger.info(
+                "Animation task completed | task_id=%s renderer=%s elapsed=%.2fs output=%s",
+                task_id,
+                request.renderer,
+                elapsed,
+                result_path,
+            )
+            return result_path
+        except Exception:
+            elapsed = perf_counter() - task_start
+            logger.exception("Animation task failed | task_id=%s renderer=%s elapsed=%.2fs", task_id, request.renderer, elapsed)
+            raise
 
     TASK_MANAGER.submit(task_id, job)
     return TaskResponse(task_id=task_id)

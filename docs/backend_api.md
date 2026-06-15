@@ -301,11 +301,13 @@ Content-Type: application/json
   },
   "level": "element",
   "property_name": "NetPressure",
+  "renderer": "matplotlib",
   "output_format": "gif",
   "well_file_id": null,
   "fps": 20,
   "interval": 50,
-  "keep_aspect": true
+  "keep_aspect": true,
+  "time_step_stride": 4
 }
 ```
 
@@ -318,11 +320,24 @@ Content-Type: application/json
 | `group_display_names` | object/null | 否 | `null` | group 到 Name 的映射；动画标题会从 Name 中提取 `Stage N` |
 | `level` | string | 是 | 无 | `element` 或 `cell` |
 | `property_name` | string | 是 | 无 | 要展示的属性名 |
+| `renderer` | string | 否 | `matplotlib` | 渲染器，支持 `matplotlib` 和 `pyvista` |
 | `output_format` | string | 否 | `gif` | `gif` 或 `mp4` |
 | `well_file_id` | string/null | 否 | `null` | 上传井轨迹后返回的文件 ID |
 | `fps` | int | 否 | `20` | 输出动画帧率，范围 1-60 |
 | `interval` | int | 否 | `50` | Matplotlib 动画帧间隔，单位 ms |
 | `keep_aspect` | bool | 否 | `true` | 是否保持 3D 坐标轴比例 |
+| `time_step_stride` | int | 否 | `1` | 时间步采样间隔；`1` 表示全部时间步，`2/4/10` 表示每 2/4/10 个时间步取一帧，且每个 group 的最后时间步一定保留 |
+
+PyVista/VTK 渲染器说明：
+
+- 请求体中设置 `"renderer": "pyvista"` 会使用 PyVista/VTK 后端生成动画。
+- 需要额外安装依赖：
+
+```bash
+pip install pyvista vtk imageio imageio-ffmpeg
+```
+
+- 该渲染器使用 VTK/OpenGL/EGL，而不是 CUDA。服务器即使有 H100，也需要 NVIDIA 驱动提供可用的 OpenGL/EGL 渲染环境。
 
 返回示例：
 

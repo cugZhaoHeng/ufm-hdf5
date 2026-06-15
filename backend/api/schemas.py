@@ -15,11 +15,18 @@ class AnimationRequest(BaseModel):
     )
     level: Literal["element", "cell"] = Field(..., description="Animation detail level.")
     property_name: str = Field(..., description="Element or cell property dataset name.")
+    renderer: Literal["matplotlib", "pyvista"] = Field("matplotlib", description="Rendering backend.")
     output_format: Literal["gif", "mp4"] = Field("gif", description="Animation output format.")
     well_file_id: str | None = Field(None, description="Optional uploaded well trajectory file id.")
     fps: int = Field(20, ge=1, le=60, description="Frames per second for saved animation.")
     interval: int = Field(50, ge=1, le=5000, description="Matplotlib frame interval in milliseconds.")
     keep_aspect: bool = Field(True, description="Whether to keep the 3D axis aspect ratio.")
+    time_step_stride: int = Field(
+        1,
+        ge=1,
+        le=100,
+        description="Render one frame every N time steps. The final time step of each group is always kept.",
+    )
 
 
 class FinalStateRequest(BaseModel):

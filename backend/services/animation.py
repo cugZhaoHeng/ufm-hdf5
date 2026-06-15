@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from time import perf_counter
 from typing import Callable, Literal
 
 import h5py
@@ -69,6 +70,27 @@ def read_simulation_display_name(h5_file: h5py.File, group_name: str) -> str:
 def format_animation_title(level: str, property_name: str, stage_label: str, step_str: str) -> str:
     """Build the Matplotlib title for one animation frame."""
     return f"{stage_label} | {level.title()} {property_name} | Step: {step_str}"
+
+
+def build_sampled_time_steps(n_time: int, stride: int) -> list[int]:
+    """Return sampled time-step indices while always keeping the final step.
+
+    Parameters
+    ----------
+    n_time:
+        Number of available time steps for one group.
+    stride:
+        Sampling interval. ``1`` keeps every step; ``2`` keeps every other
+        step; ``10`` keeps one frame per ten source time steps.
+    """
+    if n_time <= 0:
+        return []
+    stride = max(1, int(stride))
+    steps = list(range(0, n_time, stride))
+    final_step = n_time - 1
+    if not steps or steps[-1] != final_step:
+        steps.append(final_step)
+    return steps
 
 
 def read_well_trajectory(well_file_path: str | Path, z_column: str = "TVD") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -281,6 +303,7 @@ def generate_ufm_animation(
     fps: int = 20,
     interval: int = 50,
     keep_aspect: bool = True,
+    time_step_stride: int = 1,
     progress_callback: ProgressCallback | None = None,
 ) -> Path:
     """Generate a UFM fracture animation and return the output file path.
@@ -308,6 +331,17 @@ def generate_ufm_animation(
         raise ValueError("At least one group must be selected.")
     if output_format not in {"gif", "mp4"}:
         raise ValueError("output_format only supports 'gif' or 'mp4'.")
+
+    render_start = perf_counter()
+    logger.info(
+        "Matplotlib animation started | file=%s level=%s property=%s groups=%s stride=%s format=%s",
+        h5_file_path,
+        level,
+        property_name,
+        len(group_names),
+        time_step_stride,
+        output_format,
+    )
 
     reader = read_element_stage_data if level == "element" else read_cell_stage_data
     all_sim_data = []
@@ -416,7 +450,7 @@ def generate_ufm_animation(
     frames_map = [
         (sim_idx, time_step)
         for sim_idx, sim_data in enumerate(all_sim_data)
-        for time_step in range(sim_data["n_time"])
+        for time_step in build_sampled_time_steps(sim_data["n_time"], time_step_stride)
     ]
     finalized_sims = set()
     frame_count = max(1, len(frames_map))
@@ -485,5 +519,6 @@ def generate_ufm_animation(
     finally:
         plt.close(fig)
 
-    logger.info(f"Animation saved: {output_path}")
+    elapsed = perf_counter() - render_start
+    logger.info("Matplotlib animation finished | elapsed=%.2fs output=%s", elapsed, output_path)
     return output_path

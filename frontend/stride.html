@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UFM Time-Step Stride Test</title>
+  <link rel="stylesheet" href="https://www.jeasyui.com/easyui/themes/default/easyui.css">
+  <link rel="stylesheet" href="https://www.jeasyui.com/easyui/themes/icon.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>UFM Time-Step Stride Test</h1>
+        <p>Run a separate animation backend on port 8091 and sample time steps faster for heavy cell-level jobs.</p>
+      </div>
+      <div class="top-actions">
+        <a id="previewBtn" class="easyui-linkbutton" data-options="iconCls:'icon-search',disabled:true">Preview</a>
+        <a id="downloadBtn" class="easyui-linkbutton" data-options="iconCls:'icon-save',disabled:true">Download</a>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel upload-panel">
+        <h2>Files</h2>
+        <div class="field-row">
+          <label>H5 List</label>
+          <select id="h5Select" class="easyui-combobox" data-options="editable:false"></select>
+          <a id="inspectH5Btn" class="easyui-linkbutton" data-options="iconCls:'icon-search'">Parse Selected</a>
+        </div>
+        <div class="field-row">
+          <label>Upload H5</label>
+          <input id="h5File" type="file" accept=".h5,.hdf5">
+          <a id="uploadH5Btn" class="easyui-linkbutton" data-options="iconCls:'icon-ok'">Upload & Parse</a>
+        </div>
+        <div class="field-row">
+          <label>Well List</label>
+          <select id="wellSelect" class="easyui-combobox" data-options="editable:false"></select>
+          <a id="useWellBtn" class="easyui-linkbutton" data-options="iconCls:'icon-search'">Use Selected</a>
+        </div>
+        <div class="field-row">
+          <label>Upload Well</label>
+          <input id="wellFile" type="file">
+          <a id="uploadWellBtn" class="easyui-linkbutton" data-options="iconCls:'icon-ok'">Upload Well</a>
+        </div>
+        <div id="fileInfo" class="muted">No H5 file uploaded.</div>
+      </section>
+
+      <section class="panel groups-panel">
+        <div class="panel-heading">
+          <h2>Groups</h2>
+          <label class="checkline">
+            <input id="selectAllGroups" type="checkbox">
+            Select all
+          </label>
+        </div>
+        <table id="groupsGrid"></table>
+      </section>
+
+      <section class="panel run-panel">
+        <h2>Stride Animation Options</h2>
+        <div class="control-grid">
+          <label>Level</label>
+          <select id="levelSelect" class="easyui-combobox" data-options="editable:false,panelHeight:'auto'">
+            <option value="element">Element</option>
+            <option value="cell">Cell</option>
+          </select>
+
+          <label>Property</label>
+          <select id="propertySelect" class="easyui-combobox" data-options="editable:false,panelHeight:'auto'"></select>
+
+          <label>Renderer</label>
+          <select id="rendererSelect" class="easyui-combobox" data-options="editable:false,panelHeight:'auto'">
+            <option value="pyvista">PyVista/VTK</option>
+            <option value="matplotlib">Matplotlib</option>
+          </select>
+
+          <label>Time Stride</label>
+          <input id="timeStepStrideInput" class="easyui-numberspinner" value="10" data-options="min:1,max:100,editable:true">
+
+          <label>Format</label>
+          <select id="formatSelect" class="easyui-combobox" data-options="editable:false,panelHeight:'auto'">
+            <option value="gif">GIF</option>
+            <option value="mp4">MP4</option>
+          </select>
+
+          <label>FPS</label>
+          <input id="fpsInput" class="easyui-numberspinner" value="20" data-options="min:1,max:60,editable:true">
+
+          <label>Interval</label>
+          <input id="intervalInput" class="easyui-numberspinner" value="50" data-options="min:1,max:5000,editable:true">
+
+          <label>Keep Aspect</label>
+          <label class="checkline">
+            <input id="animationKeepAspectInput" type="checkbox" checked>
+            <span>Scale X/Y/Z proportionally</span>
+          </label>
+        </div>
+        <div class="actions">
+          <a id="runBtn" class="easyui-linkbutton" data-options="iconCls:'icon-reload',disabled:true">Generate With Stride</a>
+        </div>
+      </section>
+
+      <section class="panel progress-panel">
+        <h2>Progress</h2>
+        <div id="progressBar" class="easyui-progressbar" data-options="value:0"></div>
+        <div id="progressText" class="status-text">Waiting.</div>
+      </section>
+
+      <section class="panel final-state-panel">
+        <div class="panel-heading">
+          <h2>Final Time Step State</h2>
+          <span id="finalStateInfo" class="muted">Upload an H5 file to preview the final state.</span>
+        </div>
+        <div class="final-state-body">
+          <aside class="final-state-controls">
+            <label>Level</label>
+            <select id="finalLevelSelect" class="easyui-combobox" data-options="editable:false,panelHeight:'auto'">
+              <option value="element">Element</option>
+              <option value="cell">Cell</option>
+            </select>
+
+            <label>Property</label>
+            <select id="finalPropertySelect" class="easyui-combobox" data-options="editable:false,panelHeight:'auto'"></select>
+
+            <label class="checkline final-checkline">
+              <input id="keepAspectInput" type="checkbox" checked>
+              Keep Aspect
+            </label>
+          </aside>
+          <div id="finalStateChart" class="final-state-chart"></div>
+        </div>
+      </section>
+
+      <section class="panel preview-panel">
+        <div class="panel-heading">
+          <h2>Animation Preview</h2>
+          <span id="previewInfo" class="muted">No generated animation yet.</span>
+        </div>
+        <div id="previewContainer" class="preview-container">
+          <div class="preview-empty">Generate an animation, then click Preview.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.UFM_API_BASE = "http://127.0.0.1:8091";
+  </script>
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://www.jeasyui.com/easyui/jquery.easyui.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts-gl@2/dist/echarts-gl.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

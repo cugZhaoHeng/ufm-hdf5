@@ -65,7 +65,7 @@ def index():
 @app.get("/{asset_name}", include_in_schema=False)
 def frontend_asset(asset_name: str):
     """Serve root-level frontend assets used by direct and Nginx deployments."""
-    allowed_assets = {"app.js", "config.js", "styles.css"}
+    allowed_assets = {"app.js", "config.js", "styles.css", "stride.html"}
     if asset_name not in allowed_assets:
         return FileResponse(FRONTEND_DIR / "index.html")
     return FileResponse(FRONTEND_DIR / asset_name)

@@ -245,11 +245,13 @@
       group_display_names: getSelectedGroupDisplayNames(),
       level: $("#levelSelect").combobox("getValue"),
       property_name: propertyName,
+      renderer: $("#rendererSelect").length ? $("#rendererSelect").combobox("getValue") : "matplotlib",
       output_format: $("#formatSelect").combobox("getValue"),
       well_file_id: uploadedWell ? uploadedWell.file_id : null,
       fps: Number($("#fpsInput").numberspinner("getValue")),
       interval: Number($("#intervalInput").numberspinner("getValue")),
-      keep_aspect: $("#animationKeepAspectInput").is(":checked")
+      keep_aspect: $("#animationKeepAspectInput").is(":checked"),
+      time_step_stride: Number($("#timeStepStrideInput").length ? $("#timeStepStrideInput").numberspinner("getValue") : 1) || 1
     };
     resultFormat = payload.output_format;
     resultUrl = null;
